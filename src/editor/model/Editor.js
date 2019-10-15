@@ -1,69 +1,123 @@
-import { isUndefined, defaults } from 'underscore';
+import { isUndefined, isArray, contains, toArray, keys } from 'underscore';
+import Backbone from 'backbone';
+import Extender from 'utils/extender';
+import { getModel } from 'utils/mixins';
 
 const deps = [
   require('utils'),
+  require('keymaps'),
+  require('undo_manager'),
   require('storage_manager'),
   require('device_manager'),
   require('parser'),
   require('selector_manager'),
+  require('style_manager'),
   require('modal_dialog'),
   require('code_manager'),
   require('panels'),
   require('rich_text_editor'),
-  require('style_manager'),
   require('asset_manager'),
   require('css_composer'),
+  require('trait_manager'),
   require('dom_components'),
+  require('navigator'),
   require('canvas'),
   require('commands'),
-  require('block_manager'),
-  require('trait_manager'),
+  require('block_manager')
 ];
 
-const Backbone = require('backbone');
-const UndoManager = require('backbone-undo');
-const key = require('keymaster');
+const { Collection } = Backbone;
 let timedInterval;
+let updateItr;
 
-require('utils/extender')({
+Extender({
   Backbone: Backbone,
   $: Backbone.$
 });
 
 const $ = Backbone.$;
+const logs = {
+  debug: console.log,
+  info: console.info,
+  warning: console.warn,
+  error: console.error
+};
 
-module.exports = Backbone.Model.extend({
-
-  defaults: {
-    clipboard: null,
-    designerMode: false,
-    selectedComponent: null,
-    previousModel: null,
-    changesCount: 0,
-    storables: [],
-    modules: [],
-    toLoad: [],
-    opened: {},
-    device: '',
+export default Backbone.Model.extend({
+  defaults() {
+    return {
+      editing: 0,
+      selected: new Collection(),
+      clipboard: null,
+      dmode: 0,
+      componentHovered: null,
+      previousModel: null,
+      changesCount: 0,
+      storables: [],
+      modules: [],
+      toLoad: [],
+      opened: {},
+      device: ''
+    };
   },
 
-  initialize(c) {
+  initialize(c = {}) {
     this.config = c;
     this.set('Config', c);
     this.set('modules', []);
+    this.set('toLoad', []);
+    this.set('storables', []);
+    this.set('dmode', c.dragMode);
+    const el = c.el;
+    const log = c.log;
+    const toLog = log === true ? keys(logs) : isArray(log) ? log : [];
 
-    if(c.el && c.fromElement)
-      this.config.components = c.el.innerHTML;
+    if (el && c.fromElement) this.config.components = el.innerHTML;
+    this.attrsOrig = el
+      ? toArray(el.attributes).reduce((res, next) => {
+          res[next.nodeName] = next.nodeValue;
+          return res;
+        }, {})
+      : '';
 
     // Load modules
-    deps.forEach(function(name){
-      this.loadModule(name);
-    }, this);
+    deps.forEach(name => this.loadModule(name));
+    this.on('change:componentHovered', this.componentHovered, this);
+    this.on('change:changesCount', this.updateChanges, this);
+    toLog.forEach(e => this.listenLog(e));
 
-    this.initUndoManager();
+    // Deprecations
+    [{ from: 'change:selectedComponent', to: 'component:toggled' }].forEach(
+      event => {
+        const eventFrom = event.from;
+        const eventTo = event.to;
+        this.listenTo(this, eventFrom, (...args) => {
+          this.trigger(eventTo, ...args);
+          this.logWarning(
+            `The event '${eventFrom}' is deprecated, replace it with '${eventTo}'`
+          );
+        });
+      }
+    );
+  },
 
-    this.on('change:selectedComponent', this.componentSelected, this);
-    this.on('change:changesCount', this.updateBeforeUnload, this);
+  getContainer() {
+    return this.config.el;
+  },
+
+  listenLog(event) {
+    this.listenTo(this, `log:${event}`, logs[event]);
+  },
+
+  /**
+   * Get configurations
+   * @param  {string} [prop] Property name
+   * @return {any} Returns the configuration object or
+   *  the value of the specified property
+   */
+  getConfig(prop) {
+    const config = this.config;
+    return isUndefined(prop) ? config : config[prop];
   },
 
   /**
@@ -80,20 +134,14 @@ module.exports = Backbone.Model.extend({
       module.onLoad();
     });
 
-    // Stuff to do post load (eg. init undo manager for loaded components)
+    // Stuff to do post load
     const postLoad = () => {
-      // I've initialized undo manager in initialize() because otherwise the
-      // editor will unable to fetch the instance via 'editor.UndoManager' but
-      // I need to cleare the stack now as it was dirtied by 'onLoad' method
-      this.um.clear();
-      this.initUndoManager();
-      this.get('modules').forEach(module =>
-        module.postLoad && module.postLoad(this)
-      );
+      const modules = this.get('modules');
+      modules.forEach(module => module.postLoad && module.postLoad(this));
       clb && clb();
     };
 
-    if (sm && sm.getConfig().autoload) {
+    if (sm && sm.canAutoload()) {
       this.load(postLoad);
     } else {
       postLoad();
@@ -105,13 +153,18 @@ module.exports = Backbone.Model.extend({
    * and there are unsaved changes
    * @private
    */
-  updateBeforeUnload() {
-    var changes = this.get('changesCount');
+  updateChanges() {
+    const stm = this.get('StorageManager');
+    const changes = this.get('changesCount');
+    updateItr && clearTimeout(updateItr);
+    updateItr = setTimeout(() => this.trigger('update'));
 
-    if (this.config.noticeOnUnload && changes) {
-      window.onbeforeunload = e => 1;
-    } else {
-      window.onbeforeunload = null;
+    if (this.config.noticeOnUnload) {
+      window.onbeforeunload = changes ? e => 1 : null;
+    }
+
+    if (stm.isAutosave() && changes >= stm.getStepsBeforeSave()) {
+      this.store();
     }
   },
 
@@ -122,31 +175,35 @@ module.exports = Backbone.Model.extend({
    * @private
    */
   loadModule(moduleName) {
-    var c = this.config;
-    var M = new moduleName();
-    var name = M.name.charAt(0).toLowerCase() + M.name.slice(1);
-    var cfg = c[name] || c[M.name] || {};
-    cfg.pStylePrefix = c.pStylePrefix || '';
+    const { config } = this;
+    const Module = moduleName.default || moduleName;
+    const Mod = new Module();
+    const name = Mod.name.charAt(0).toLowerCase() + Mod.name.slice(1);
+    const cfgParent = !isUndefined(config[name])
+      ? config[name]
+      : config[Mod.name];
+    const cfg = cfgParent || {};
+    const sm = this.get('StorageManager');
+    cfg.pStylePrefix = config.pStylePrefix || '';
 
-    // Check if module is storable
-    var sm = this.get('StorageManager');
-    if(M.storageKey && M.store && M.load && sm){
+    if (!isUndefined(cfgParent) && !cfgParent) {
+      cfg._disable = 1;
+    }
+
+    if (Mod.storageKey && Mod.store && Mod.load && sm) {
       cfg.stm = sm;
-      var storables = this.get('storables');
-      storables.push(M);
+      const storables = this.get('storables');
+      storables.push(Mod);
       this.set('storables', storables);
     }
+
     cfg.em = this;
-    M.init(Object.create(cfg));
+    Mod.init({ ...cfg });
 
     // Bind the module to the editor model if public
-    if(!M.private)
-      this.set(M.name, M);
-
-    if(M.onLoad)
-      this.get('toLoad').push(M);
-
-    this.get('modules').push(M);
+    !Mod.private && this.set(Mod.name, Mod);
+    Mod.onLoad && this.get('toLoad').push(Mod);
+    this.get('modules').push(Mod);
     return this;
   },
 
@@ -160,27 +217,8 @@ module.exports = Backbone.Model.extend({
     this.set('Editor', editor);
   },
 
-  /**
-   * Listen for new rules
-   * @param {Object} collection
-   * @private
-   */
-  listenRules(collection) {
-    this.stopListening(collection, 'add remove', this.listenRule);
-    this.listenTo(collection, 'add remove', this.listenRule);
-    collection.each(function(model){
-      this.listenRule(model);
-    }, this);
-  },
-
-  /**
-   * Listen for rule changes
-   * @param {Object} model
-   * @private
-   */
-  listenRule(model) {
-    this.stopListening(model, 'change:style', this.handleUpdates);
-    this.listenTo(model, 'change:style', this.handleUpdates);
+  getEditor() {
+    return this.get('Editor');
   },
 
   /**
@@ -199,171 +237,23 @@ module.exports = Backbone.Model.extend({
 
     timedInterval && clearInterval(timedInterval);
     timedInterval = setTimeout(() => {
-      var count = this.get('changesCount') + 1;
-      var stm = this.get('StorageManager');
-      this.set('changesCount', count);
-
-      if (!stm.isAutosave() || count < stm.getStepsBeforeSave()) {
-        return;
-      }
-
       if (!opt.avoidStore) {
-        this.store();
+        this.set('changesCount', this.get('changesCount') + 1, opt);
       }
     }, 0);
   },
 
   /**
-   * Initialize Undo manager
-   * @private
-   * */
-  initUndoManager() {
-    const canvas = this.get('Canvas');
-
-    if (this.um) {
-      return;
-    }
-
-    var cmp = this.get('DomComponents');
-    if(cmp && this.config.undoManager) {
-      var that = this;
-      this.um = new UndoManager({
-          register: [cmp.getComponents(), this.get('CssComposer').getAll()],
-          track: true
-      });
-      this.UndoManager = this.um;
-      this.set('UndoManager', this.um);
-
-      key('⌘+z, ctrl+z', () => {
-        if (canvas.isInputFocused()) {
-          return;
-        }
-
-        that.um.undo(true);
-        that.trigger('component:update');
-      });
-
-      key('⌘+shift+z, ctrl+shift+z', () => {
-        if (canvas.isInputFocused()) {
-          return;
-        }
-        that.um.redo(true);
-        that.trigger('component:update');
-      });
-
-      var beforeCache;
-      const customUndoType = {
-        on: function (model, value, opts) {
-          var opt = opts || {};
-          if(!beforeCache){
-            beforeCache = model.previousAttributes();
-          }
-          if (opt && opt.avoidStore) {
-            return;
-          } else {
-            var obj = {
-                "object": model,
-                "before": beforeCache,
-                "after": model.toJSON()
-            };
-            beforeCache = null;
-            return obj;
-          }
-        },
-        undo: function (model, bf, af, opt) {
-          model.set(bf);
-          // Update also inputs inside Style Manager
-          that.trigger('change:selectedComponent');
-        },
-        redo: function (model, bf, af, opt) {
-          model.set(af);
-          // Update also inputs inside Style Manager
-          that.trigger('change:selectedComponent');
-        }
-      };
-
-      UndoManager.removeUndoType("change");
-      UndoManager.addUndoType("change:style", customUndoType);
-      UndoManager.addUndoType("change:content", customUndoType);
-    }
-  },
-
-  /**
-   * Callback on component selection
+   * Callback on component hover
    * @param   {Object}   Model
    * @param   {Mixed}   New value
    * @param   {Object}   Options
    * @private
    * */
-  componentSelected(model, val, options) {
-    if (!this.get('selectedComponent')) {
-      this.trigger('deselect-comp');
-    } else {
-      this.trigger('select-comp',[model,val,options]);
-      this.trigger('component:selected', arguments);
-    }
-  },
-
-  /**
-   * Triggered when components are updated
-   * @param  {Object}  model
-   * @param  {Mixed}    val  Value
-   * @param  {Object}  opt  Options
-   * @private
-   * */
-  updateComponents(model, val, opt) {
-    var comps  = model.get('components'),
-        classes  = model.get('classes'),
-        avSt  = opt ? opt.avoidStore : 0;
-
-    // Observe component with Undo Manager
-    if(this.um)
-      this.um.register(comps);
-
-    // Call stopListening for not creating nested listeners
-    this.stopListening(comps, 'add', this.updateComponents);
-    this.stopListening(comps, 'remove', this.rmComponents);
-    this.listenTo(comps, 'add', this.updateComponents);
-    this.listenTo(comps, 'remove', this.rmComponents);
-
-    this.stopListening(classes, 'add remove', this.handleUpdates);
-    this.listenTo(classes, 'add remove', this.handleUpdates);
-
-    var evn = 'change:style change:content change:attributes';
-    this.stopListening(model, evn, this.handleUpdates);
-    this.listenTo(model, evn, this.handleUpdates);
-
-    if(!avSt)
-      this.handleUpdates(model, val, opt);
-  },
-
-  /**
-   * Init stuff like storage for already existing elements
-   * @param {Object}  model
-   * @private
-   */
-  initChildrenComp(model) {
-      var comps  = model.get('components');
-      this.updateComponents(model, null, { avoidStore : 1 });
-      comps.each(function(md) {
-          this.initChildrenComp(md);
-          if(this.um)
-            this.um.register(md);
-      }, this);
-  },
-
-  /**
-   * Triggered when some component is removed updated
-   * @param  {Object}  model
-   * @param  {Mixed}    val  Value
-   * @param  {Object}  opt  Options
-   * @private
-   * */
-  rmComponents(model, val, opt) {
-    var avSt  = opt ? opt.avoidStore : 0;
-
-    if(!avSt)
-      this.handleUpdates(model, val, opt);
+  componentHovered(editor, component, options) {
+    const prev = this.previous('componentHovered');
+    prev && this.trigger('component:unhovered', prev, options);
+    component && this.trigger('component:hovered', component, options);
   },
 
   /**
@@ -372,23 +262,104 @@ module.exports = Backbone.Model.extend({
    * @private
    */
   getSelected() {
-    return this.get('selectedComponent');
+    return this.get('selected').last();
+  },
+
+  /**
+   * Returns an array of all selected components
+   * @return {Array}
+   * @private
+   */
+  getSelectedAll() {
+    return this.get('selected').models;
   },
 
   /**
    * Select a component
    * @param  {Component|HTMLElement} el Component to select
-   * @param  {Object} opts Options, optional
+   * @param  {Object} [opts={}] Options, optional
    * @private
    */
   setSelected(el, opts = {}) {
-    let model = el;
+    const { scroll } = opts;
+    const multiple = isArray(el);
+    const els = multiple ? el : [el];
+    const selected = this.get('selected');
+    let added;
 
-    if (el instanceof HTMLElement) {
-      model = $(el).data('model');
-    }
+    // If an array is passed remove all selected
+    // expect those yet to be selected
+    multiple && this.removeSelected(selected.filter(s => !contains(els, s)));
 
-    this.set('selectedComponent', model, opts);
+    els.forEach(el => {
+      const model = getModel(el, $);
+      if (model && !model.get('selectable')) return;
+      !multiple && this.removeSelected(selected.filter(s => s !== model));
+      this.addSelected(model, opts);
+      added = model;
+    });
+
+    scroll && added && this.get('Canvas').scrollTo(added, scroll);
+  },
+
+  /**
+   * Add component to selection
+   * @param  {Component|HTMLElement} el Component to select
+   * @param  {Object} [opts={}] Options, optional
+   * @private
+   */
+  addSelected(el, opts = {}) {
+    const model = getModel(el, $);
+    const models = isArray(model) ? model : [model];
+
+    models.forEach(model => {
+      if (model && !model.get('selectable')) return;
+      const selected = this.get('selected');
+      opts.forceChange && selected.remove(model, opts);
+      selected.push(model, opts);
+    });
+  },
+
+  /**
+   * Remove component from selection
+   * @param  {Component|HTMLElement} el Component to select
+   * @param  {Object} [opts={}] Options, optional
+   * @private
+   */
+  removeSelected(el, opts = {}) {
+    this.get('selected').remove(getModel(el, $), opts);
+  },
+
+  /**
+   * Toggle component selection
+   * @param  {Component|HTMLElement} el Component to select
+   * @param  {Object} [opts={}] Options, optional
+   * @private
+   */
+  toggleSelected(el, opts = {}) {
+    const model = getModel(el, $);
+    const models = isArray(model) ? model : [model];
+
+    models.forEach(model => {
+      if (this.get('selected').contains(model)) {
+        this.removeSelected(model, opts);
+      } else {
+        this.addSelected(model, opts);
+      }
+    });
+  },
+
+  /**
+   * Hover a component
+   * @param  {Component|HTMLElement} el Component to select
+   * @param  {Object} [opts={}] Options, optional
+   * @private
+   */
+  setHovered(el, opts = {}) {
+    const model = getModel(el, $);
+    if (model && !model.get('hoverable')) return;
+    opts.forceChange && this.set('componentHovered', '');
+    this.set('componentHovered', model, opts);
   },
 
   /**
@@ -410,10 +381,9 @@ module.exports = Backbone.Model.extend({
     var cmp = this.get('DomComponents');
     var cm = this.get('CodeManager');
 
-    if(!cmp || !cm)
-      return;
+    if (!cmp || !cm) return;
 
-    var wrp  = cmp.getComponents();
+    var wrp = cmp.getComponents();
     return cm.getCode(wrp, 'json');
   },
 
@@ -425,8 +395,7 @@ module.exports = Backbone.Model.extend({
    */
   setStyle(style) {
     var rules = this.get('CssComposer').getAll();
-    for(var i = 0, len = rules.length; i < len; i++)
-      rules.pop();
+    for (var i = 0, len = rules.length; i < len; i++) rules.pop();
     rules.add(style);
     return this;
   },
@@ -448,11 +417,12 @@ module.exports = Backbone.Model.extend({
   getHtml() {
     const config = this.config;
     const exportWrapper = config.exportWrapper;
-    const wrappesIsBody = config.wrappesIsBody;
+    const wrapperIsBody = config.wrapperIsBody;
     const js = config.jsInHtml ? this.getJs() : '';
-    var wrp  = this.get('DomComponents').getComponent();
+    var wrp = this.get('DomComponents').getComponent();
     var html = this.get('CodeManager').getCode(wrp, 'html', {
-      exportWrapper, wrappesIsBody
+      exportWrapper,
+      wrapperIsBody
     });
     html += js ? `<script>${js}</script>` : '';
     return html;
@@ -460,19 +430,29 @@ module.exports = Backbone.Model.extend({
 
   /**
    * Returns CSS built inside canvas
+   * @param {Object} [opts={}] Options
    * @return {string} CSS string
    * @private
    */
-  getCss() {
+  getCss(opts = {}) {
     const config = this.config;
-    const wrappesIsBody = config.wrappesIsBody;
-    var cssc = this.get('CssComposer');
-    var wrp = this.get('DomComponents').getComponent();
-    var protCss = config.protectedCss;
+    const wrapperIsBody = config.wrapperIsBody;
+    const avoidProt = opts.avoidProtected;
+    const keepUnusedStyles = !isUndefined(opts.keepUnusedStyles)
+      ? opts.keepUnusedStyles
+      : config.keepUnusedStyles;
+    const cssc = this.get('CssComposer');
+    const wrp = this.get('DomComponents').getComponent();
+    const protCss = !avoidProt ? config.protectedCss : '';
 
-    return protCss + this.get('CodeManager').getCode(wrp, 'css', {
-      cssc, wrappesIsBody
-    });
+    return (
+      protCss +
+      this.get('CodeManager').getCode(wrp, 'css', {
+        cssc,
+        wrapperIsBody,
+        keepUnusedStyles
+      })
+    );
   },
 
   /**
@@ -482,7 +462,9 @@ module.exports = Backbone.Model.extend({
    */
   getJs() {
     var wrp = this.get('DomComponents').getWrapper();
-    return this.get('CodeManager').getCode(wrp, 'js').trim();
+    return this.get('CodeManager')
+      .getCode(wrp, 'js')
+      .trim();
   },
 
   /**
@@ -494,18 +476,16 @@ module.exports = Backbone.Model.extend({
   store(clb) {
     var sm = this.get('StorageManager');
     var store = {};
-    if(!sm)
-      return;
+    if (!sm) return;
 
     // Fetch what to store
     this.get('storables').forEach(m => {
       var obj = m.store(1);
-      for(var el in obj)
-        store[el] = obj[el];
+      for (var el in obj) store[el] = obj[el];
     });
 
-    sm.store(store, () => {
-      clb && clb();
+    sm.store(store, res => {
+      clb && clb(res);
       this.set('changesCount', 0);
       this.trigger('storage:store', store);
     });
@@ -519,7 +499,7 @@ module.exports = Backbone.Model.extend({
    * @private
    */
   load(clb = null) {
-    this.getCacheLoad(1, (res) => {
+    this.getCacheLoad(1, res => {
       this.get('storables').forEach(module => module.load(res));
       clb && clb(res);
     });
@@ -534,13 +514,11 @@ module.exports = Backbone.Model.extend({
    */
   getCacheLoad(force, clb) {
     var f = force ? 1 : 0;
-    if(this.cacheLoad && !f)
-      return this.cacheLoad;
+    if (this.cacheLoad && !f) return this.cacheLoad;
     var sm = this.get('StorageManager');
     var load = [];
 
-    if(!sm)
-      return {};
+    if (!sm) return {};
 
     this.get('storables').forEach(m => {
       var key = m.storageKey;
@@ -554,7 +532,7 @@ module.exports = Backbone.Model.extend({
     sm.load(load, res => {
       this.cacheLoad = res;
       clb && clb(res);
-      this.trigger('storage:load', res);
+      setTimeout(() => this.trigger('storage:load', res), 0);
     });
   },
 
@@ -570,26 +548,26 @@ module.exports = Backbone.Model.extend({
 
   /**
    * Run default command if setted
+   * @param {Object} [opts={}] Options
    * @private
    */
-  runDefault() {
+  runDefault(opts = {}) {
     var command = this.get('Commands').get(this.config.defaultCommand);
-    if(!command || this.defaultRunning)
-      return;
-    command.stop(this, this);
-    command.run(this, this);
+    if (!command || this.defaultRunning) return;
+    command.stop(this, this, opts);
+    command.run(this, this, opts);
     this.defaultRunning = 1;
   },
 
   /**
    * Stop default command
+   * @param {Object} [opts={}] Options
    * @private
    */
-  stopDefault() {
+  stopDefault(opts = {}) {
     var command = this.get('Commands').get(this.config.defaultCommand);
-    if(!command)
-      return;
-    command.stop(this, this);
+    if (!command) return;
+    command.stop(this, this, opts);
     this.defaultRunning = 0;
   },
 
@@ -598,6 +576,7 @@ module.exports = Backbone.Model.extend({
    * @private
    */
   refreshCanvas() {
+    this.set('canvasOffset', null);
     this.set('canvasOffset', this.get('Canvas').getOffset());
   },
 
@@ -610,6 +589,110 @@ module.exports = Backbone.Model.extend({
   clearSelection(win) {
     var w = win || window;
     w.getSelection().removeAllRanges();
+  },
+
+  /**
+   * Get the current media text
+   * @return {string}
+   */
+  getCurrentMedia() {
+    const config = this.config;
+    const device = this.getDeviceModel();
+    const condition = config.mediaCondition;
+    const preview = config.devicePreviewMode;
+    const width = device && device.get('widthMedia');
+    return device && width && !preview ? `(${condition}: ${width})` : '';
+  },
+
+  /**
+   * Return the component wrapper
+   * @return {Component}
+   */
+  getWrapper() {
+    return this.get('DomComponents').getWrapper();
+  },
+
+  /**
+   * Return the count of changes made to the content and not yet stored.
+   * This count resets at any `store()`
+   * @return {number}
+   */
+  getDirtyCount() {
+    return this.get('changesCount');
+  },
+
+  getZoomDecimal() {
+    return this.get('Canvas').getZoomDecimal();
+  },
+
+  setDragMode(value) {
+    return this.set('dmode', value);
+  },
+
+  /**
+   * Returns true if the editor is in absolute mode
+   * @returns {Boolean}
+   */
+  inAbsoluteMode() {
+    return this.get('dmode') === 'absolute';
+  },
+
+  /**
+   * Destroy editor
+   */
+  destroyAll() {
+    const {
+      DomComponents,
+      CssComposer,
+      UndoManager,
+      Panels,
+      Canvas,
+      Keymaps
+    } = this.attributes;
+    DomComponents.clear();
+    CssComposer.clear();
+    UndoManager.clear().removeAll();
+    Panels.getPanels().reset();
+    Canvas.getCanvasView().remove();
+    Keymaps.removeAll();
+    this.view.remove();
+    this.stopListening();
+    $(this.config.el)
+      .empty()
+      .attr(this.attrsOrig);
+  },
+
+  setEditing(value) {
+    this.set('editing', value);
+    return this;
+  },
+
+  isEditing() {
+    return !!this.get('editing');
+  },
+
+  log(msg, opts = {}) {
+    const { ns, level = 'debug' } = opts;
+    this.trigger('log', msg, opts);
+    level && this.trigger(`log:${level}`, msg, opts);
+
+    if (ns) {
+      const logNs = `log-${ns}`;
+      this.trigger(logNs, msg, opts);
+      level && this.trigger(`${logNs}:${level}`, msg, opts);
+    }
+  },
+
+  logInfo(msg, opts) {
+    this.log(msg, { ...opts, level: 'info' });
+  },
+
+  logWarning(msg, opts) {
+    this.log(msg, { ...opts, level: 'warning' });
+  },
+
+  logError(msg, opts) {
+    this.log(msg, { ...opts, level: 'error' });
   },
 
   /**
@@ -633,5 +716,4 @@ module.exports = Backbone.Model.extend({
       el[varName][name] = value;
     }
   }
-
 });

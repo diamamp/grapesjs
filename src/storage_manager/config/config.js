@@ -1,4 +1,4 @@
-module.exports = {
+export default {
   // Prefix identifier that will be used inside storing and loading
   id: 'gjs-',
 
@@ -24,7 +24,7 @@ module.exports = {
   //Enable/Disable saving HTML template
   storeHtml: 1,
 
-  //Enable/Disable saving HTML template
+  //Enable/Disable saving CSS template
   storeCss: 1,
 
   // ONLY FOR LOCAL STORAGE
@@ -53,6 +53,15 @@ module.exports = {
   // set contentType paramater of $.ajax
   // true: application/json; charset=utf-8'
   // false: 'x-www-form-urlencoded'
-  contentTypeJson: false
+  contentTypeJson: true,
 
+  credentials: 'include',
+
+  // Pass custom options to fetch API (remote storage)
+  // You can pass a simple object: { someOption: 'someValue' }
+  // or a function wich returns and object to add:
+  // currentOpts => {
+  //  return currentOpts.method === 'post' ?  { method: 'patch' } : {};
+  // }
+  fetchOptions: ''
 };

@@ -1,23 +1,29 @@
+import Backbone from 'backbone';
+
 const $ = Backbone.$;
 
-module.exports = Backbone.View.extend({
-
+export default Backbone.View.extend({
   events: {
-    'change': 'handleChange',
+    change: 'handleChange'
   },
 
   template() {
-    const holderClass = this.holderClass;
-    return `<span class="${holderClass}"></span>`;
+    return `<span class="${this.holderClass()}"></span>`;
+  },
+
+  inputClass() {
+    return `${this.ppfx}field`;
+  },
+
+  holderClass() {
+    return `${this.ppfx}input-holder`;
   },
 
   initialize(opts = {}) {
     const ppfx = opts.ppfx || '';
-    this.target = opts.target || {};
-    this.inputClass = ppfx + 'field';
-    this.inputHolderClass = ppfx + 'input-holder';
-    this.holderClass = `${ppfx}input-holder`;
+    this.opts = opts;
     this.ppfx = ppfx;
+    this.em = opts.target || {};
     this.listenTo(this.model, 'change:value', this.handleModelChange);
   },
 
@@ -29,20 +35,10 @@ module.exports = Backbone.View.extend({
   },
 
   /**
-   * Handled when the view is changed
-   */
-  handleChange(e) {
-    e.stopPropagation();
-    this.model.set('value', this.getInputEl().value);
-    this.elementUpdated();
-  },
-
-  /**
-   * Set value to the model
+   * Set value to the input element
    * @param {string} value
-   * @param {Object} opts
    */
-  setValue(value, opts = {}) {
+  setValue(value) {
     const model = this.model;
     let val = value || model.get('defaults');
     const input = this.getInputEl();
@@ -57,26 +53,35 @@ module.exports = Backbone.View.extend({
   },
 
   /**
+   * Handled when the view is changed
+   */
+  handleChange(e) {
+    e.stopPropagation();
+    const value = this.getInputEl().value;
+    this.model.set({ value }, { fromInput: 1 });
+    this.elementUpdated();
+  },
+
+  /**
    * Get the input element
    * @return {HTMLElement}
    */
   getInputEl() {
-    if(!this.inputEl) {
-      const plh = this.model.get('defaults');
-      const cls = this.inputCls;
-      this.inputEl = $(`<input type="text" class="${cls}" placeholder="${plh}">`);
+    if (!this.inputEl) {
+      const { model } = this;
+      const plh = model.get('placeholder') || model.get('defaults') || '';
+      this.inputEl = $(`<input type="text" placeholder="${plh}">`);
     }
+
     return this.inputEl.get(0);
   },
 
   render() {
+    this.inputEl = null;
     const el = this.$el;
-    const ppfx = this.ppfx;
-    const holderClass = this.holderClass;
-    el.addClass(this.inputClass);
+    el.addClass(this.inputClass());
     el.html(this.template());
-    el.find(`.${holderClass}`).append(this.getInputEl());
+    el.find(`.${this.holderClass()}`).append(this.getInputEl());
     return this;
   }
-
 });

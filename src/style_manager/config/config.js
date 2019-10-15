@@ -1,10 +1,17 @@
-module.exports = {
+export default {
   stylePrefix: 'sm-',
 
   sectors: [],
 
+  // Specify the element to use as a container, string (query) or HTMLElement
+  // With the empty value, nothing will be rendered
+  appendTo: '',
+
   // Text to show in case no element selected
   textNoElement: 'Select an element before using Style Manager',
+
+  // Text for layers
+  textLayer: 'Layer',
 
   // Hide the property in case it's not stylable for the
   // selected component (each component has 'stylable' property)
@@ -21,13 +28,8 @@ module.exports = {
   showComputed: true,
 
   // Adds the possibility to clear property value from the target style
-  clearProperties: false,
+  clearProperties: 0,
 
-  // Properties which are valid to be shown as computed
-  // (Identified as inherited properties: https://developer.mozilla.org/en-US/docs/Web/CSS/inheritance)
-  validComputed: ['border-collapse', 'border-spacing', 'caption-side', 'color', 'cursor', 'direction', 'empty-cells',
-  'font-family', 'font-size', 'font-style', 'font-variant', 'font-weight', 'font-size-adjust', 'font-stretch', 'font',
-  'letter-spacing', 'line-height', 'list-style-image', 'list-style-position', 'list-style-type', 'list-style', 'orphans',
-  'quotes', 'tab-size', 'text-align', 'text-align-last', 'text-decoration-color', 'text-indent', 'text-justify',
-  'text-shadow', 'text-transform', 'visibility', 'white-space', 'widows', 'word-break', 'word-spacing', 'word-wrap'],
+  // Properties not to take in account for computed styles
+  avoidComputed: ['width', 'height']
 };

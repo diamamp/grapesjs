@@ -1,30 +1,71 @@
-var Backbone = require('backbone');
+import Backbone from 'backbone';
+import { isUndefined } from 'underscore';
 
-module.exports = Backbone.View.extend({
-
+export default Backbone.View.extend({
   initialize(o) {
     this.opts = o || {};
     this.config = o.config || {};
-    this.listenTo( this.collection, 'add', this.addTo );
-    this.listenTo( this.collection, 'reset', this.render );
+    const coll = this.collection;
+    this.listenTo(coll, 'add', this.addTo);
+    this.listenTo(coll, 'reset', this.resetChildren);
+    this.listenTo(coll, 'remove', this.removeChildren);
+  },
+
+  removeChildren(removed, coll, opts = {}) {
+    const em = this.config.em;
+    const view = removed.view;
+    const tempComp = removed.opt.temporary;
+    const tempRemove = opts.temporary;
+    if (!view) return;
+    view.remove.apply(view);
+    const { childrenView, scriptContainer } = view;
+    childrenView && childrenView.stopListening();
+    scriptContainer && scriptContainer.remove();
+    removed.components().forEach(it => this.removeChildren(it, coll, opts));
+
+    if (em && !tempRemove) {
+      // Remove the component from the global list
+      const id = removed.getId();
+      const domc = em.get('DomComponents');
+      delete domc.componentsById[id];
+
+      // Remove all related CSS rules
+      const allRules = em.get('CssComposer').getAll();
+      allRules.remove(
+        allRules.filter(
+          rule => rule.getSelectors().getFullString() === `#${id}`
+        )
+      );
+
+      if (!tempComp) {
+        const cm = em.get('Commands');
+        const hasSign = removed.get('style-signature');
+        const optStyle = { target: removed };
+        hasSign && cm.run('core:component-style-clear', optStyle);
+        removed.removed();
+        em.trigger('component:remove', removed);
+      }
+    }
   },
 
   /**
    * Add to collection
-   * @param  {Object} Model
-   *
-   * @return  void
+   * @param {Model} model
+   * @param {Collection} coll
+   * @param {Object} opts
    * @private
    * */
-  addTo(model) {
-    var i  = this.collection.indexOf(model);
+  addTo(model, coll = {}, opts = {}) {
+    const em = this.config.em;
+    const i = this.collection.indexOf(model);
     this.addToCollection(model, null, i);
 
-    var em = this.config.em;
-    if(em) {
-      // OLD
-      em.trigger('add:component', model);
-      em.trigger('component:add', model);
+    if (em && !opts.temporary) {
+      const triggerAdd = model => {
+        em.trigger('component:add', model);
+        model.components().forEach(comp => triggerAdd(comp));
+      };
+      triggerAdd(model);
     }
   },
 
@@ -38,73 +79,68 @@ module.exports = Backbone.View.extend({
    * @private
    * */
   addToCollection(model, fragmentEl, index) {
-    if(!this.compView)
-      this.compView  =  require('./ComponentView');
-    var fragment  = fragmentEl || null,
-    viewObject  = this.compView;
-    //console.log('Add to collection', model, 'Index',i);
+    if (!this.compView) this.compView = require('./ComponentView').default;
+    const { config, opts } = this;
+    const fragment = fragmentEl || null;
+    const dt = opts.componentTypes;
+    const type = model.get('type');
+    let viewObject = this.compView;
 
-    var dt = this.opts.componentTypes;
-
-    var type = model.get('type');
-
-    for (var it = 0; it < dt.length; it++) {
-      var dtId = dt[it].id;
-      if(dtId == type) {
+    for (let it = 0; it < dt.length; it++) {
+      if (dt[it].id == type) {
         viewObject = dt[it].view;
         break;
       }
     }
-    //viewObject = dt[type] ? dt[type].view : dt.default.view;
 
-    var view = new viewObject({
+    const view = new viewObject({
       model,
-      config: this.config,
-      componentTypes: dt,
+      config,
+      componentTypes: dt
     });
-    var rendered  = view.render().el;
-    if(view.model.get('type') == 'textnode')
-      rendered =  document.createTextNode(view.model.get('content'));
+    let rendered = view.render().el;
 
-    if(fragment){
+    if (fragment) {
       fragment.appendChild(rendered);
-    }else{
-      var p  = this.$parent;
-      var pc = p.children;
-      if(typeof index != 'undefined'){
-        var method  = 'before';
+    } else {
+      const parent = this.parentEl;
+      const children = parent.childNodes;
+
+      if (!isUndefined(index)) {
+        const lastIndex = children.length == index;
+
         // If the added model is the last of collection
         // need to change the logic of append
-        if(pc && p.children().length == index){
+        if (lastIndex) {
           index--;
-          method  = 'after';
         }
+
         // In case the added is new in the collection index will be -1
-        if(index < 0) {
-          p.append(rendered);
-        }else {
-          if(pc) {
-            p.children().eq(index)[method](rendered);
-          }
+        if (lastIndex || !children.length) {
+          parent.appendChild(rendered);
+        } else {
+          parent.insertBefore(rendered, children[index]);
         }
-      }else{
-        p.append(rendered);
+      } else {
+        parent.appendChild(rendered);
       }
     }
 
     return rendered;
   },
 
-  render($p) {
-    var fragment   = document.createDocumentFragment();
-    this.$parent  = $p || this.$el;
-    this.$el.empty();
-    this.collection.each(function(model){
-      this.addToCollection(model, fragment);
-    },this);
-    this.$el.append(fragment);
+  resetChildren() {
+    this.parentEl.innerHTML = '';
+    this.collection.each(model => this.addToCollection(model));
+  },
 
+  render(parent) {
+    const el = this.el;
+    const frag = document.createDocumentFragment();
+    this.parentEl = parent || this.el;
+    this.collection.each(model => this.addToCollection(model, frag));
+    el.innerHTML = '';
+    el.appendChild(frag);
     return this;
   }
-
 });
