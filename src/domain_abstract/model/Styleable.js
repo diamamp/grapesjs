@@ -1,4 +1,11 @@
+import { isString, isArray, keys } from 'underscore';
+import { shallowDiff } from 'utils/mixins';
+import ParserHtml from 'parser/model/ParserHtml';
+
+const parseStyle = ParserHtml().parseStyle;
+
 export default {
+  parseStyle,
 
   /**
    * To trigger the style change event on models I have to
@@ -7,7 +14,7 @@ export default {
    * @return {Object}
    */
   extendStyle(prop) {
-    return Object.assign({}, this.getStyle(), prop);
+    return { ...this.getStyle(), ...prop };
   },
 
   /**
@@ -15,16 +22,34 @@ export default {
    * @return {Object}
    */
   getStyle() {
-    return Object.assign({}, this.get('style'));
+    return { ...this.get('style') };
   },
 
   /**
    * Set new style object
-   * @param {Object} prop
+   * @param {Object|string} prop
    * @param {Object} opts
+   * @return {Object} Applied properties
    */
   setStyle(prop = {}, opts = {}) {
-    this.set('style', Object.assign({}, prop), opts);
+    if (isString(prop)) {
+      prop = parseStyle(prop);
+    }
+
+    const propOrig = this.getStyle();
+    const propNew = { ...prop };
+    this.set('style', propNew, opts);
+    const diff = shallowDiff(propOrig, propNew);
+    keys(diff).forEach(pr => {
+      const em = this.em;
+      this.trigger(`change:style:${pr}`);
+      if (em) {
+        em.trigger(`styleable:change`, this, pr);
+        em.trigger(`styleable:change:${pr}`, this, pr);
+      }
+    });
+
+    return propNew;
   },
 
   /**
@@ -56,5 +81,28 @@ export default {
     let style = this.getStyle();
     delete style[prop];
     this.setStyle(style);
+  },
+
+  /**
+   * Returns string of style properties
+   * @param {Object} [opts={}] Options
+   * @return {String}
+   */
+  styleToString(opts = {}) {
+    const result = [];
+    const style = this.getStyle();
+
+    for (let prop in style) {
+      const imp = opts.important;
+      const important = isArray(imp) ? imp.indexOf(prop) >= 0 : imp;
+      const value = `${style[prop]}${important ? ' !important' : ''}`;
+      value && result.push(`${prop}:${value};`);
+    }
+
+    return result.join('');
+  },
+
+  getSelectors() {
+    return this.get('selectors') || this.get('classes');
   }
-}
+};

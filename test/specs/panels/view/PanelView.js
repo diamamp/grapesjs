@@ -1,73 +1,74 @@
-const PanelView = require('panels/view/PanelView');
-const Panel = require('panels/model/Panel');
+import PanelView from 'panels/view/PanelView';
+import Panel from 'panels/model/Panel';
 
 module.exports = {
   run() {
+    describe('PanelView', () => {
+      var fixtures;
+      var model;
+      var view;
 
-      describe('PanelView', () => {
-
-        var $fixtures;
-        var $fixture;
-        var model;
-        var view;
-
-        before(() => {
-          $fixtures  = $("#fixtures");
-          $fixture   = $('<div class="cssrule-fixture"></div>');
+      beforeEach(() => {
+        model = new Panel();
+        view = new PanelView({
+          model
         });
+        document.body.innerHTML = '<div id="fixtures"></div>';
+        fixtures = document.body.querySelector('#fixtures');
+        fixtures.appendChild(view.render().el);
+      });
 
+      afterEach(() => {
+        view.remove();
+      });
+
+      test('Panel empty', () => {
+        fixtures.firstChild.className = '';
+        expect(fixtures.innerHTML).toEqual('<div class=""></div>');
+      });
+
+      test('Append content', () => {
+        model.set('appendContent', 'test');
+        model.set('appendContent', 'test2');
+        expect(view.$el.html()).toEqual('testtest2');
+      });
+
+      test('Update content', () => {
+        model.set('content', 'test');
+        model.set('content', 'test2');
+        expect(view.$el.html()).toEqual('test2');
+      });
+
+      test('Hide panel', () => {
+        expect(view.$el.hasClass('hidden')).toBeFalsy();
+        model.set('visible', false);
+        expect(view.$el.hasClass('hidden')).toBeTruthy();
+      });
+
+      test('Show panel', () => {
+        model.set('visible', false);
+        expect(view.$el.hasClass('hidden')).toBeTruthy();
+        model.set('visible', true);
+        expect(view.$el.hasClass('hidden')).toBeFalsy();
+      });
+
+      describe('Init with options', () => {
         beforeEach(() => {
-          model = new Panel();
+          model = new Panel({
+            buttons: [{}]
+          });
           view = new PanelView({
             model
           });
-          $fixture.empty().appendTo($fixtures);
-          $fixture.html(view.render().el);
+          document.body.innerHTML = '<div id="fixtures"></div>';
+          fixtures = document.body.querySelector('#fixtures');
+          fixtures.appendChild(view.render().el);
         });
 
         afterEach(() => {
           view.remove();
         });
-
-        after(() => {
-          $fixture.remove();
-        });
-
-        it('Panel empty', () => {
-          expect($fixture.html()).toEqual('<div class="panel"></div>');
-        });
-
-        it('Append content', () => {
-          model.set('appendContent','test');
-          model.set('appendContent','test2');
-          expect(view.$el.html()).toEqual('testtest2');
-        });
-
-        it('Update content', () => {
-          model.set('content','test');
-          model.set('content','test2');
-          expect(view.$el.html()).toEqual('test2');
-        });
-
-        describe('Init with options', () => {
-
-          beforeEach(() => {
-            model = new Panel({
-              buttons: [{}]
-            });
-            view = new PanelView({
-              model
-            });
-            $fixture.empty().appendTo($fixtures);
-            $fixture.html(view.render().el);
-          });
-
-          afterEach(() => {
-            view.remove();
-          });
-
-        });
-
+      });
     });
   }
 };

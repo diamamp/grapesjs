@@ -1,15 +1,19 @@
-var Backbone = require('backbone');
-var ComponentView = require('./ComponentImageView');
+import ComponentView from './ComponentImageView';
+import OComponentView from './ComponentView';
 
-module.exports = ComponentView.extend({
-
+export default ComponentView.extend({
   tagName: 'div',
 
   events: {},
 
   initialize(o) {
-    ComponentView.prototype.initialize.apply(this, arguments);
-    this.listenTo(this.model, 'change:loop change:autoplay change:controls change:color', this.updateVideo);
+    OComponentView.prototype.initialize.apply(this, arguments);
+    this.listenTo(this.model, 'change:src', this.updateSrc);
+    this.listenTo(
+      this.model,
+      'change:loop change:autoplay change:controls change:color change:rel change:modestbranding change:poster',
+      this.updateVideo
+    );
     this.listenTo(this.model, 'change:provider', this.updateProvider);
   },
 
@@ -28,17 +32,24 @@ module.exports = ComponentView.extend({
    * @private
    */
   updateSrc() {
-    var prov = this.model.get('provider');
-    var src = this.model.get('src');
+    const { model, videoEl } = this;
+    if (!videoEl) return;
+    const prov = model.get('provider');
+    let src = model.get('src');
+
     switch (prov) {
       case 'yt':
-        src = this.model.getYoutubeSrc();
+        src = model.getYoutubeSrc();
+        break;
+      case 'ytnc':
+        src = model.getYoutubeNoCookieSrc();
         break;
       case 'vi':
-        src = this.model.getVimeoSrc();
+        src = model.getVimeoSrc();
         break;
     }
-    this.videoEl.src = src;
+
+    videoEl.src = src;
   },
 
   /**
@@ -50,13 +61,16 @@ module.exports = ComponentView.extend({
     var videoEl = this.videoEl;
     var md = this.model;
     switch (prov) {
-      case 'yt': case 'vi':
+      case 'yt':
+      case 'ytnc':
+      case 'vi':
         this.model.trigger('change:videoId');
         break;
       default:
         videoEl.loop = md.get('loop');
         videoEl.autoplay = md.get('autoplay');
         videoEl.controls = md.get('controls');
+        videoEl.poster = md.get('poster');
     }
   },
 
@@ -65,6 +79,9 @@ module.exports = ComponentView.extend({
     switch (prov) {
       case 'yt':
         videoEl = this.renderYoutube();
+        break;
+      case 'ytnc':
+        videoEl = this.renderYoutubeNoCookie();
         break;
       case 'vi':
         videoEl = this.renderVimeo();
@@ -92,6 +109,15 @@ module.exports = ComponentView.extend({
     return el;
   },
 
+  renderYoutubeNoCookie() {
+    var el = document.createElement('iframe');
+    el.src = this.model.getYoutubeNoCookieSrc();
+    el.frameBorder = 0;
+    el.setAttribute('allowfullscreen', true);
+    this.initVideoEl(el);
+    return el;
+  },
+
   renderVimeo() {
     var el = document.createElement('iframe');
     el.src = this.model.getVimeoSrc();
@@ -113,6 +139,5 @@ module.exports = ComponentView.extend({
     var prov = this.model.get('provider');
     this.el.appendChild(this.renderByProvider(prov));
     return this;
-  },
-
+  }
 });

@@ -1,68 +1,130 @@
-var Backbone = require('backbone');
-var ComponentView = require('./ComponentView');
+import { on, off } from 'utils/mixins';
+import ComponentView from './ComponentView';
 
-module.exports = ComponentView.extend({
+const compProt = ComponentView.prototype;
 
+export default ComponentView.extend({
   events: {
-    'dblclick': 'enableEditing',
-    'change': 'parseRender',
+    dblclick: 'onActive',
+    input: 'onInput'
   },
 
   initialize(o) {
-    ComponentView.prototype.initialize.apply(this, arguments);
-    _.bindAll(this,'disableEditing');
+    compProt.initialize.apply(this, arguments);
+    this.disableEditing = this.disableEditing.bind(this);
     const model = this.model;
-    this.listenTo(model, 'focus active', this.enableEditing);
-    this.listenTo(model, 'change:content', this.updateContent);
-    this.rte = this.config.rte || '';
-    this.activeRte = null;
-    this.em = this.config.em;
+    const em = this.em;
+    this.listenTo(model, 'focus', this.onActive);
+    this.listenTo(model, 'change:content', this.updateContentText);
+    this.listenTo(model, 'sync:content', this.syncContent);
+    this.rte = em && em.get('RichTextEditor');
+  },
+
+  updateContentText(m, v, opts = {}) {
+    !opts.fromDisable && this.disableEditing();
   },
 
   /**
-   * Enable the component to be editable
-   * @param {Event} e
+   * Enable element content editing
    * @private
    * */
-  enableEditing(e) {
-    var editable = this.model.get('editable');
-    if(this.rte && editable) {
+  onActive(e) {
+    // We place this before stopPropagation in case of nested
+    // text components will not block the editing (#1394)
+    if (this.rteEnabled || !this.model.get('editable')) {
+      return;
+    }
+    e && e.stopPropagation && e.stopPropagation();
+    const rte = this.rte;
+
+    if (rte) {
       try {
-        this.activeRte = this.rte.attach(this, this.activeRte);
-        this.rte.focus(this, this.activeRte);
+        this.activeRte = rte.enable(this, this.activeRte);
       } catch (err) {
         console.error(err);
       }
     }
+
+    this.rteEnabled = 1;
     this.toggleEvents(1);
   },
 
   /**
-   * Disable this component to be editable
-   * @param {Event}
+   * Disable element content editing
    * @private
    * */
-  disableEditing(e) {
-    var model = this.model;
-    var editable = model.get('editable');
+  disableEditing() {
+    const { model, rte, activeRte } = this;
+    const editable = model.get('editable');
 
-    if(this.rte && editable) {
+    if (rte && editable) {
       try {
-        this.rte.detach(this, this.activeRte);
+        rte.disable(this, activeRte);
       } catch (err) {
         console.error(err);
       }
-      var el = this.getChildrenContainer();
-      // Avoid double content by removing its children components
-      model.get('components').reset();
-      model.set('content', el.innerHTML);
+
+      this.syncContent();
     }
 
-    if(!this.rte.customRte && editable) {
-      this.parseRender();
-    }
-
+    this.rteEnabled = 0;
     this.toggleEvents();
+  },
+
+  /**
+   * Merge content from the DOM to the model
+   */
+  syncContent(opts = {}) {
+    const { model, rte, rteEnabled } = this;
+    if (!rteEnabled && !opts.force) return;
+    const content = this.getChildrenContainer().innerHTML;
+    const comps = model.components();
+    const contentOpt = { fromDisable: 1, ...opts };
+    comps.length && comps.reset(null, opts);
+    model.set('content', '', contentOpt);
+
+    // If there is a custom RTE the content is just baked staticly
+    // inside 'content'
+    if (rte.customRte) {
+      model.set('content', content, contentOpt);
+    } else {
+      const clean = model => {
+        const textable = !!model.get('textable');
+        const selectable =
+          !['text', 'default', ''].some(type => model.is(type)) || textable;
+        model.set(
+          {
+            editable: selectable && model.get('editable'),
+            selectable: selectable,
+            hoverable: selectable,
+            removable: textable,
+            draggable: textable,
+            highlightable: 0,
+            copyable: textable,
+            ...(!textable && { toolbar: '' })
+          },
+          opts
+        );
+        model.get('components').each(model => clean(model));
+      };
+
+      // Avoid re-render on reset with silent option
+      !opts.silent && model.trigger('change:content', model, '', contentOpt);
+      comps.add(content, opts);
+      comps.each(model => clean(model));
+      comps.trigger('resetNavigator');
+    }
+  },
+
+  /**
+   * Callback on input event
+   * @param  {Event} e
+   */
+  onInput() {
+    const { em } = this;
+
+    // Update toolbars
+    em && em.trigger('change:canvasOffset');
   },
 
   /**
@@ -75,40 +137,33 @@ module.exports = ComponentView.extend({
   },
 
   /**
-   * Parse content and re-render it
-   * @private
-   */
-  parseRender() {
-    var el = this.getChildrenContainer();
-    var comps = this.model.get('components');
-    var opts = {silent: true};
-
-    // Avoid re-render on reset with silent option
-    comps.reset(null, opts);
-    comps.add(el.innerHTML, opts);
-    this.model.set('content', '');
-    this.render();
-
-    // As the reset was in silent mode I need to notify
-    // the navigator about the change
-    comps.trigger('resetNavigator');
-  },
-
-  /**
    * Enable/Disable events
    * @param {Boolean} enable
    */
   toggleEvents(enable) {
     var method = enable ? 'on' : 'off';
+    const mixins = { on, off };
+    this.em.setEditing(enable);
 
     // The ownerDocument is from the frame
-    var elDocs = [this.el.ownerDocument, document, this.rte];
-    $(elDocs).off('mousedown', this.disableEditing);
-    $(elDocs)[method]('mousedown', this.disableEditing);
+    var elDocs = [this.el.ownerDocument, document];
+    mixins.off(elDocs, 'mousedown', this.disableEditing);
+    mixins[method](elDocs, 'mousedown', this.disableEditing);
 
     // Avoid closing edit mode on component click
     this.$el.off('mousedown', this.disablePropagation);
     this.$el[method]('mousedown', this.disablePropagation);
-  },
 
+    // Fixes #2210 but use this also as a replacement
+    // of this fix: bd7b804f3b46eb45b4398304b2345ce870f232d2
+    if (this.config.draggableComponents) {
+      let { el } = this;
+
+      while (el) {
+        el.draggable = enable ? !1 : !0;
+        el = el.parentNode;
+        el.tagName == 'BODY' && (el = 0);
+      }
+    }
+  }
 });

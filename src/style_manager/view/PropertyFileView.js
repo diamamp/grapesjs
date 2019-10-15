@@ -1,9 +1,11 @@
-var Backbone = require('backbone');
-var PropertyView = require('./PropertyView');
+import { isString } from 'underscore';
+import Backbone from 'backbone';
+import PropertyView from './PropertyView';
 
-module.exports = PropertyView.extend({
+const $ = Backbone.$;
 
-  templateField() {
+export default PropertyView.extend({
+  templateInput() {
     const pfx = this.pfx;
     const ppfx = this.ppfx;
     const assetsLabel = this.config.assetsLabel || 'Images';
@@ -22,25 +24,22 @@ module.exports = PropertyView.extend({
         <div id="${pfx}close">&Cross;</div>
       </div>
     </div>
-    <div style="clear:both"></div>
     `;
   },
 
-  initialize(options) {
-    PropertyView.prototype.initialize.apply(this, arguments);
-    this.assets = this.target.get('assets');
-    this.modal = this.target.get('Modal');
-    this.am = this.target.get('AssetManager');
-    this.className = this.className + ' '+ this.pfx +'file';
-    this.events['click #'+this.pfx+'close']    = 'removeFile';
-    this.events['click #'+this.pfx+'images']  = 'openAssetManager';
+  init() {
+    const em = this.em;
+    this.modal = em.get('Modal');
+    this.am = em.get('AssetManager');
+    this.events['click #' + this.pfx + 'close'] = 'removeFile';
+    this.events['click #' + this.pfx + 'images'] = 'openAssetManager';
     this.delegateEvents();
   },
 
-  /** @inheritdoc */
-  renderInput() {
+  onRender() {
     if (!this.$input) {
-      this.$input = $('<input>', {placeholder: this.model.getDefaultValue(), type: 'text' });
+      const plh = this.model.getDefaultValue();
+      this.$input = $(`<input placeholder="${plh}">`);
     }
 
     if (!this.$preview) {
@@ -54,9 +53,15 @@ module.exports = PropertyView.extend({
     this.setValue(this.componentValue, 0);
   },
 
+  clearCached() {
+    PropertyView.prototype.clearCached.apply(this, arguments);
+    this.$preview = null;
+    this.$previewBox = null;
+  },
+
   setValue(value, f) {
     PropertyView.prototype.setValue.apply(this, arguments);
-    this.setPreviewView(value && value != this.getDefaultValue());
+    this.setPreviewView(value && value != this.model.getDefaultValue());
     this.setPreview(value);
   },
 
@@ -95,7 +100,7 @@ module.exports = PropertyView.extend({
   /** @inheritdoc */
   cleanValue() {
     this.setPreviewView(0);
-    this.model.set({value: ''},{silent: true});
+    this.model.set({ value: '' }, { silent: true });
   },
 
   /**
@@ -116,21 +121,22 @@ module.exports = PropertyView.extend({
    * @return void
    * */
   openAssetManager(e) {
-    var that  = this;
-    var em = this.em;
-    var editor = em ? em.get('Editor') : '';
+    const { em, modal } = this;
+    const editor = em ? em.get('Editor') : '';
 
-    if(editor) {
-      this.modal.setTitle('Select image');
-      this.modal.setContent(this.am.getContainer());
-      this.am.setTarget(null);
+    if (editor) {
       editor.runCommand('open-assets', {
-        target: this.model,
-        onSelect(target) {
-          that.modal.close();
-          that.spreadUrl(target.get('src'));
+        types: ['image'],
+        accept: 'image/*',
+        target: this.getTargetModel(),
+        onClick() {},
+        onDblClick() {},
+        onSelect: asset => {
+          modal.close();
+          const url = isString(asset) ? asset : asset.get('src');
+          this.spreadUrl(url);
         }
       });
     }
-  },
+  }
 });

@@ -1,78 +1,25 @@
-var ToolbarView = require('dom_components/view/ToolbarView');
-var Toolbar = require('dom_components/model/Toolbar');
-var key = require('keymaster');
+import Backbone from 'backbone';
+import { bindAll, isElement, isUndefined } from 'underscore';
+import { on, off, getUnitFromValue, isTaggableNode } from 'utils/mixins';
+import ToolbarView from 'dom_components/view/ToolbarView';
+import Toolbar from 'dom_components/model/Toolbar';
+
+const $ = Backbone.$;
 let showOffsets;
 
-module.exports = {
-
+export default {
   init(o) {
-    _.bindAll(this, 'onHover', 'onOut', 'onClick', 'onKeyPress');
+    bindAll(this, 'onHover', 'onOut', 'onClick', 'onFrameScroll');
   },
 
-
   enable() {
-    _.bindAll(this, 'copyComp', 'pasteComp', 'onFrameScroll');
     this.frameOff = this.canvasOff = this.adjScroll = null;
-    var config  = this.config.em.get('Config');
     this.startSelectComponent();
-    this.toggleClipboard(config.copyPaste);
-    var em = this.config.em;
+    const { em } = this.config;
     showOffsets = 1;
 
     em.on('component:update', this.updateAttached, this);
     em.on('change:canvasOffset', this.updateAttached, this);
-    em.on('change:selectedComponent', this.updateToolbar, this);
-  },
-
-  /**
-   * Toggle clipboard function
-   * @param  {Boolean} active
-   * @return {this}
-   * @private
-   */
-  toggleClipboard(active) {
-    var en = active || 0;
-    if(en){
-      key('⌘+c, ctrl+c', this.copyComp);
-      key('⌘+v, ctrl+v', this.pasteComp);
-    }else{
-      key.unbind('⌘+c, ctrl+c');
-      key.unbind('⌘+v, ctrl+v');
-    }
-  },
-
-  /**
-   * Copy component to the clipboard
-   * @private
-   */
-  copyComp() {
-    var el = this.editorModel.get('selectedComponent');
-    if(el && el.get('copyable'))
-      this.editorModel.set('clipboard', el);
-  },
-
-  /**
-   * Paste component from clipboard
-   * @private
-   */
-  pasteComp() {
-    var clp = this.editorModel.get('clipboard'),
-        sel = this.editorModel.get('selectedComponent');
-    if(clp && sel && sel.collection){
-      var index = sel.collection.indexOf(sel),
-          clone = clp.clone();
-      sel.collection.add(clone, { at: index + 1 });
-    }
-  },
-
-  /**
-   * Returns canavs body el
-   */
-  getCanvasBodyEl() {
-    if(!this.$bodyEl) {
-      this.$bodyEl = $(this.getCanvasBody());
-    }
-    return this.$bodyEl;
   },
 
   /**
@@ -80,7 +27,7 @@ module.exports = {
    * @private
    * */
   startSelectComponent() {
-   this.toggleSelectComponent(1);
+    this.toggleSelectComponent(1);
   },
 
   /**
@@ -88,7 +35,7 @@ module.exports = {
    * @private
    * */
   stopSelectComponent() {
-   this.toggleSelectComponent();
+    this.toggleSelectComponent();
   },
 
   /**
@@ -96,42 +43,17 @@ module.exports = {
    * @private
    * */
   toggleSelectComponent(enable) {
-    var el = '*';
-    var method = enable ? 'on' : 'off';
-    this.getCanvasBodyEl()
-      [method]('mouseover', el, this.onHover)
-      [method]('mouseout', el, this.onOut)
-      [method]('click', el, this.onClick);
-
-    var cw = this.getContentWindow();
-    cw[method]('scroll', this.onFrameScroll);
-    cw[method]('keydown', this.onKeyPress);
-  },
-
-  /**
-   * On key press event
-   * @private
-   * */
-  onKeyPress(e) {
-    var key = e.which || e.keyCode;
-    var comp = this.editorModel.get('selectedComponent');
-    var focused = this.frameEl.contentDocument.activeElement.tagName !== 'BODY';
-
-    // On CANC (46) or Backspace (8)
-    if(key == 8 || key == 46) {
-      if(!focused)
-        e.preventDefault();
-      if(comp && !focused) {
-        if(!comp.get('removable'))
-          return;
-        comp.set('status','');
-        comp.destroy();
-        this.hideBadge();
-        this.clean();
-        this.hideHighlighter();
-        this.editorModel.set('selectedComponent', null);
-      }
-    }
+    const { em } = this;
+    const method = enable ? 'on' : 'off';
+    const methods = { on, off };
+    const body = this.getCanvasBody();
+    const win = this.getContentWindow();
+    methods[method](body, 'mouseover', this.onHover);
+    methods[method](body, 'mouseout', this.onOut);
+    methods[method](body, 'click touchend', this.onClick);
+    methods[method](win, 'scroll resize', this.onFrameScroll);
+    em[method]('component:toggled', this.onSelect, this);
+    em[method]('change:componentHovered', this.onHovered, this);
   },
 
   /**
@@ -141,19 +63,41 @@ module.exports = {
    */
   onHover(e) {
     e.stopPropagation();
-    var trg = e.target;
+    let trg = e.target;
+    let $el = $(trg);
+    let model = $el.data('model');
+
+    if (!model) {
+      let parent = $el.parent();
+      while (!model && parent.length > 0) {
+        model = parent.data('model');
+        parent = parent.parent();
+      }
+    }
 
     // Adjust tools scroll top
-    if(!this.adjScroll){
+    if (!this.adjScroll) {
       this.adjScroll = 1;
-      this.onFrameScroll(e);
       this.updateAttached();
     }
 
-    var pos = this.getElementPos(trg);
-    this.updateBadge(trg, pos);
-    this.updateHighlighter(trg, pos);
-    this.showElementOffset(trg, pos);
+    if (model && !model.get('hoverable')) {
+      let parent = model && model.parent();
+      while (parent && !parent.get('hoverable')) parent = parent.parent();
+      model = parent;
+    }
+
+    this.em.setHovered(model, { forceChange: 1 });
+  },
+
+  onHovered(em, component) {
+    const trg = component && component.getEl();
+    if (trg) {
+      const pos = this.getElementPos(trg);
+      this.updateBadge(trg, pos);
+      this.updateHighlighter(trg, pos);
+      this.showElementOffset(trg, pos);
+    }
   },
 
   /**
@@ -161,8 +105,8 @@ module.exports = {
    * @param {Object}  e
    * @private
    */
-  onOut(e) {
-    e.stopPropagation();
+  onOut(ev) {
+    ev && ev.stopPropagation();
     this.hideBadge();
     this.hideHighlighter();
     this.hideElementOffset();
@@ -177,14 +121,14 @@ module.exports = {
     var $el = $(el);
     var model = $el.data('model');
 
-    if ( (model && model.get('status') == 'selected') ||
-        !showOffsets){
+    if ((model && model.get('status') == 'selected') || !showOffsets) {
       return;
     }
 
     this.editor.runCommand('show-offset', {
       el,
       elPos: pos,
+      force: 1
     });
   },
 
@@ -194,7 +138,8 @@ module.exports = {
    * @param {Object} pos
    */
   hideElementOffset(el, pos) {
-    this.editor.stopCommand('show-offset');
+    const { editor } = this;
+    editor && editor.stopCommand('show-offset');
   },
 
   /**
@@ -206,7 +151,7 @@ module.exports = {
     this.editor.runCommand('show-offset', {
       el,
       elPos: pos,
-      state: 'Fixed',
+      state: 'Fixed'
     });
   },
 
@@ -216,8 +161,7 @@ module.exports = {
    * @param {Object} pos
    */
   hideFixedElementOffset(el, pos) {
-    if(this.editor)
-      this.editor.stopCommand('show-offset', {state: 'Fixed'});
+    if (this.editor) this.editor.stopCommand('show-offset', { state: 'Fixed' });
   },
 
   /**
@@ -228,18 +172,94 @@ module.exports = {
   },
 
   /**
-   * Hover command
-   * @param {Object}  e
+   * On element click
+   * @param {Event}  e
    * @private
    */
   onClick(e) {
-    var m = $(e.target).data('model');
-    if(!m)
-      return;
-    var s  = m.get('stylable');
-    if(!(s instanceof Array) && !s)
-      return;
-    this.onSelect(e, e.target);
+    const { em } = this;
+    e.stopPropagation();
+    e.preventDefault();
+    if (em.get('_cmpDrag')) return em.set('_cmpDrag');
+    const $el = $(e.target);
+    let model = $el.data('model');
+
+    if (!model) {
+      let parent = $el.parent();
+      while (!model && parent.length > 0) {
+        model = parent.data('model');
+        parent = parent.parent();
+      }
+    }
+
+    if (model) {
+      if (model.get('selectable')) {
+        this.select(model, e);
+      } else {
+        let parent = model.parent();
+        while (parent && !parent.get('selectable')) parent = parent.parent();
+        this.select(parent, e);
+      }
+    }
+  },
+
+  /**
+   * Select component
+   * @param  {Component} model
+   * @param  {Event} event
+   */
+  select(model, event = {}) {
+    if (!model) return;
+    const ctrlKey = event.ctrlKey || event.metaKey;
+    const shiftKey = event.shiftKey;
+    const { editor } = this;
+    const multiple = editor.getConfig('multipleSelection');
+    const em = this.em;
+
+    if (ctrlKey && multiple) {
+      editor.selectToggle(model);
+    } else if (shiftKey && multiple) {
+      em.clearSelection(editor.Canvas.getWindow());
+      const coll = model.collection;
+      const index = coll.indexOf(model);
+      const selAll = editor.getSelectedAll();
+      let min, max;
+
+      // Fin min and max siblings
+      editor.getSelectedAll().forEach(sel => {
+        const selColl = sel.collection;
+        const selIndex = selColl.indexOf(sel);
+        if (selColl === coll) {
+          if (selIndex < index) {
+            // First model BEFORE the selected one
+            min = isUndefined(min) ? selIndex : Math.max(min, selIndex);
+          } else if (selIndex > index) {
+            // First model AFTER the selected one
+            max = isUndefined(max) ? selIndex : Math.min(max, selIndex);
+          }
+        }
+      });
+
+      if (!isUndefined(min)) {
+        while (min !== index) {
+          editor.selectAdd(coll.at(min));
+          min++;
+        }
+      }
+
+      if (!isUndefined(max)) {
+        while (max !== index) {
+          editor.selectAdd(coll.at(max));
+          max--;
+        }
+      }
+
+      editor.selectAdd(model);
+    } else {
+      editor.select(model);
+    }
+
+    this.initResize(model);
   },
 
   /**
@@ -252,25 +272,35 @@ module.exports = {
     var $el = $(el);
     var canvas = this.canvas;
     var config = canvas.getConfig();
+    const ppfx = config.pStylePrefix || '';
     var customeLabel = config.customBadgeLabel;
     this.cacheEl = el;
-    var model = $el.data("model");
-    if(!model || !model.get('badgable'))
-      return;
+    var model = $el.data('model');
+    if (!model || !model.get('badgable')) return;
     var badge = this.getBadge();
-    var badgeLabel = model.getIcon() + model.getName();
+    const icon = model.getIcon();
+    const clsBadge = `${ppfx}badge`;
+    let badgeLabel = `${
+      icon ? `<div class="${clsBadge}__icon">${icon}</div>` : ''
+    }
+      <div class="${clsBadge}__name">${model.getName()}</div>`;
     badgeLabel = customeLabel ? customeLabel(model) : badgeLabel;
     badge.innerHTML = badgeLabel;
     var bStyle = badge.style;
     var u = 'px';
     bStyle.display = 'block';
-    var canvasPos = canvas.getCanvasView().getPosition();
-    var badgeH = badge ? badge.offsetHeight : 0;
-    var badgeW = badge ? badge.offsetWidth : 0;
-    var top = pos.top - badgeH < canvasPos.top ? canvasPos.top : pos.top - badgeH;
-    var left = pos.left + badgeW < canvasPos.left ? canvasPos.left : pos.left;
-    bStyle.top = top + u;
-    bStyle.left = left + u;
+    var canvasPos = this.getCanvasPosition();
+
+    if (canvasPos) {
+      const canvasTop = canvasPos.top;
+      const canvasLeft = canvasPos.left;
+      const posTop = pos.top - (badge ? badge.offsetHeight : 0);
+      const badgeW = badge ? badge.offsetWidth : 0;
+      var top = posTop < canvasTop ? canvasTop : posTop;
+      var left = pos.left + badgeW < canvasLeft ? canvasLeft : pos.left;
+      bStyle.top = top + u;
+      bStyle.left = left + u;
+    }
   },
 
   /**
@@ -282,7 +312,12 @@ module.exports = {
   updateHighlighter(el, pos) {
     var $el = $(el);
     var model = $el.data('model');
-    if(!model || (model && model.get('status') == 'selected')) {
+
+    if (
+      !model ||
+      !model.get('hoverable') ||
+      model.get('status') == 'selected'
+    ) {
       return;
     }
 
@@ -302,83 +337,139 @@ module.exports = {
    * @param {Object}  el
    * @private
    * */
-  onSelect(e, el) {
-    e.stopPropagation();
-    var model = $(el).data('model');
+  onSelect() {
+    // Get the selected model directly from the Editor as the event might
+    // be triggered manually without the model
+    const model = this.em.getSelected();
+    const view = model && model.view;
+    this.updateToolbar(model);
 
-    if (model) {
-      this.editor.select(model);
+    if (view) {
+      const { el } = view;
       this.showFixedElementOffset(el);
       this.hideElementOffset();
       this.hideHighlighter();
       this.initResize(el);
+    } else {
+      this.editor.stopCommand('resize');
     }
   },
 
   /**
    * Init resizer on the element if possible
-   * @param  {HTMLElement} el
+   * @param  {HTMLElement|Component} elem
    * @private
    */
-  initResize(el) {
-    var em = this.em;
-    var editor = em ? em.get('Editor') : '';
-    var config = em ? em.get('Config') : '';
-    var pfx = config.stylePrefix || '';
-    var attrName = 'data-' + pfx + 'handler';
-    var resizeClass = pfx + 'resizing';
-    var model = em.get('selectedComponent');
-    var resizable = model.get('resizable');
-    var options = {};
-    var modelToStyle;
+  initResize(elem) {
+    const { em, canvas } = this;
+    const editor = em ? em.get('Editor') : '';
+    const config = em ? em.get('Config') : '';
+    const pfx = config.stylePrefix || '';
+    const resizeClass = `${pfx}resizing`;
+    const model =
+      !isElement(elem) && isTaggableNode(elem) ? elem : em.getSelected();
+    const resizable = model.get('resizable');
+    const el = isElement(elem) ? elem : model.getEl();
+    let options = {};
+    let modelToStyle;
 
     var toggleBodyClass = (method, e, opts) => {
-      var handlerAttr = e.target.getAttribute(attrName);
-      var resizeHndClass = pfx + 'resizing-' + handlerAttr;
-      var classToAdd = resizeClass;// + ' ' +resizeHndClass;
-      if (opts.docs) {
-        opts.docs.find('body')[method](classToAdd);
-      }
+      const docs = opts.docs;
+      docs &&
+        docs.forEach(doc => {
+          const body = doc.body;
+          const cls = body.className || '';
+          body.className = (method == 'add'
+            ? `${cls} ${resizeClass}`
+            : cls.replace(resizeClass, '')
+          ).trim();
+        });
     };
-
 
     if (editor && resizable) {
       options = {
-        onStart(e, opts) {
-          toggleBodyClass('addClass', e, opts);
+        // Here the resizer is updated with the current element height and width
+        onStart(e, opts = {}) {
+          const { el, config, resizer } = opts;
+          const {
+            keyHeight,
+            keyWidth,
+            currentUnit,
+            keepAutoHeight,
+            keepAutoWidth
+          } = config;
+          toggleBodyClass('add', e, opts);
           modelToStyle = em.get('StyleManager').getModelToStyle(model);
+          const computedStyle = getComputedStyle(el);
+          const modelStyle = modelToStyle.getStyle();
+
+          let currentWidth = modelStyle[keyWidth];
+          config.autoWidth = keepAutoWidth && currentWidth === 'auto';
+          if (isNaN(parseFloat(currentWidth))) {
+            currentWidth = computedStyle[keyWidth];
+          }
+
+          let currentHeight = modelStyle[keyHeight];
+          config.autoHeight = keepAutoHeight && currentHeight === 'auto';
+          if (isNaN(parseFloat(currentHeight))) {
+            currentHeight = computedStyle[keyHeight];
+          }
+
+          resizer.startDim.w = parseFloat(currentWidth);
+          resizer.startDim.h = parseFloat(currentHeight);
           showOffsets = 0;
+
+          if (currentUnit) {
+            config.unitHeight = getUnitFromValue(currentHeight);
+            config.unitWidth = getUnitFromValue(currentWidth);
+          }
         },
+
         // Update all positioned elements (eg. component toolbar)
         onMove() {
           editor.trigger('change:canvasOffset');
         },
+
         onEnd(e, opts) {
-          toggleBodyClass('removeClass', e, opts);
+          toggleBodyClass('remove', e, opts);
           editor.trigger('change:canvasOffset');
           showOffsets = 1;
         },
+
         updateTarget(el, rect, options = {}) {
           if (!modelToStyle) {
             return;
           }
 
-          const {store, selectedHandler} = options;
+          const { store, selectedHandler, config } = options;
+          const {
+            keyHeight,
+            keyWidth,
+            autoHeight,
+            autoWidth,
+            unitWidth,
+            unitHeight
+          } = config;
           const onlyHeight = ['tc', 'bc'].indexOf(selectedHandler) >= 0;
           const onlyWidth = ['cl', 'cr'].indexOf(selectedHandler) >= 0;
-          const unit = 'px';
           const style = modelToStyle.getStyle();
 
           if (!onlyHeight) {
-            style.width = rect.w + unit;
+            const bodyw = canvas.getBody().offsetWidth;
+            const width = rect.w < bodyw ? rect.w : bodyw;
+            style[keyWidth] = autoWidth ? 'auto' : `${width}${unitWidth}`;
           }
 
           if (!onlyWidth) {
-            style.height = rect.h + unit;
+            style[keyHeight] = autoHeight ? 'auto' : `${rect.h}${unitHeight}`;
           }
 
-          modelToStyle.setStyle(style, {avoidStore: 1});
-          em.trigger('targetStyleUpdated');
+          modelToStyle.setStyle(style, { avoidStore: 1 });
+          const updateEvent = `update:component:style`;
+          em &&
+            em.trigger(
+              `${updateEvent}:${keyHeight} ${updateEvent}:${keyWidth}`
+            );
 
           if (store) {
             modelToStyle.trigger('change:style', modelToStyle, style, {});
@@ -387,13 +478,13 @@ module.exports = {
       };
 
       if (typeof resizable == 'object') {
-        options = Object.assign(options, resizable);
+        options = { ...options, ...resizable };
       }
 
-      editor.runCommand('resize', {el, options});
-
-      // On undo/redo the resizer rect is not updating, need somehow to call
-      // this.updateRect on undo/redo action
+      this.resizer = editor.runCommand('resize', { el, options, force: 1 });
+    } else {
+      editor.stopCommand('resize');
+      this.resizer = null;
     }
   },
 
@@ -403,7 +494,7 @@ module.exports = {
    */
   updateToolbar(mod) {
     var em = this.config.em;
-    var model = mod == em ? em.get('selectedComponent') : mod;
+    var model = mod == em ? em.getSelected() : mod;
     var toolbarEl = this.canvas.getToolbarEl();
     var toolbarStyle = toolbarEl.style;
 
@@ -422,7 +513,7 @@ module.exports = {
     if (showToolbar && toolbar && toolbar.length) {
       toolbarStyle.opacity = '';
       toolbarStyle.display = '';
-      if(!this.toolbar) {
+      if (!this.toolbar) {
         toolbarEl.innerHTML = '';
         this.toolbar = new Toolbar(toolbar);
         var toolbarView = new ToolbarView({
@@ -433,11 +524,10 @@ module.exports = {
       }
 
       this.toolbar.reset(toolbar);
-      var view = model.view;
-
-      if(view) {
-        this.updateToolbarPos(view.el);
-      }
+      const view = model.view;
+      toolbarStyle.top = '-100px';
+      toolbarStyle.left = 0;
+      setTimeout(() => view && this.updateToolbarPos(view.el), 0);
     } else {
       toolbarStyle.display = 'none';
     }
@@ -449,16 +539,41 @@ module.exports = {
    * @param {Object} pos
    */
   updateToolbarPos(el, elPos) {
-    var unit = 'px';
-    var toolbarEl = this.canvas.getToolbarEl();
-    var toolbarStyle = toolbarEl.style;
-    var pos = this.canvas.getTargetToElementDim(toolbarEl, el, {
+    const { canvas } = this;
+    const unit = 'px';
+    const toolbarEl = canvas.getToolbarEl();
+    const toolbarStyle = toolbarEl.style;
+    toolbarStyle.opacity = 0;
+    const pos = canvas.getTargetToElementDim(toolbarEl, el, {
       elPos,
-      event: 'toolbarPosUpdate',
+      event: 'toolbarPosUpdate'
     });
-    var leftPos = pos.left + pos.elementWidth - pos.targetWidth;
-    toolbarStyle.top = pos.top + unit;
-    toolbarStyle.left = leftPos + unit;
+
+    if (pos) {
+      const frameOffset = canvas.getCanvasView().getFrameOffset();
+
+      // Scroll with the window if the top edge is reached and the
+      // element is bigger than the canvas
+      if (
+        pos.top <= pos.canvasTop &&
+        !(pos.elementHeight + pos.targetHeight >= frameOffset.height)
+      ) {
+        pos.top = pos.elementTop + pos.elementHeight;
+      }
+
+      // Check left position of the toolbar
+      const elRight = pos.elementLeft + pos.elementWidth;
+      let left = elRight - pos.targetWidth;
+
+      if (elRight > pos.canvasWidth) {
+        left -= elRight - pos.canvasWidth;
+      }
+
+      left = left < 0 ? 0 : left;
+      toolbarStyle.top = `${pos.top}${unit}`;
+      toolbarStyle.left = `${left}${unit}`;
+      toolbarStyle.opacity = '';
+    }
   },
 
   /**
@@ -474,8 +589,7 @@ module.exports = {
    * @private
    * */
   clean() {
-    if(this.selEl)
-      this.selEl.removeClass(this.hoverClass);
+    if (this.selEl) this.selEl.removeClass(this.hoverClass);
   },
 
   /**
@@ -491,29 +605,31 @@ module.exports = {
    * On frame scroll callback
    * @private
    */
-  onFrameScroll(e) {
-    var el = this.cacheEl;
-    if (el) {
-      var elPos = this.getElementPos(el);
-      this.updateBadge(el, elPos);
-      var model = this.em.get('selectedComponent');
+  onFrameScroll() {
+    const el = this.cacheEl;
 
-      if (model) {
-        this.updateToolbarPos(model.view.el);
-      }
+    if (el) {
+      const elPos = this.getElementPos(el);
+      this.updateBadge(el, elPos);
+      const model = this.em.getSelected();
+      const viewEl = model && model.getEl();
+      viewEl && this.updateToolbarPos(viewEl);
     }
   },
 
   /**
    * Update attached elements, eg. component toolbar
-   * @return {[type]} [description]
    */
   updateAttached() {
-    var model = this.em.get('selectedComponent');
-    if (model) {
-      var view = model.view;
-      this.updateToolbarPos(view.el);
-      this.showFixedElementOffset(view.el);
+    const { resizer, em } = this;
+    const model = em.getSelected();
+    const view = model && model.view;
+
+    if (view) {
+      const { el } = view;
+      this.updateToolbarPos(el);
+      this.showFixedElementOffset(el);
+      resizer && resizer.updateContainer();
     }
   },
 
@@ -541,10 +657,10 @@ module.exports = {
    * @private
    */
   cleanPrevious(model) {
-    if(model)
+    model &&
       model.set({
         status: '',
-        state: '',
+        state: ''
       });
   },
 
@@ -553,28 +669,26 @@ module.exports = {
    * @private
    */
   getContentWindow() {
-    if(!this.contWindow)
-      this.contWindow = $(this.frameEl.contentWindow);
-    return this.contWindow;
+    return this.frameEl.contentWindow;
   },
 
   run(editor) {
     this.editor = editor && editor.get('Editor');
     this.enable();
+    this.onSelect();
   },
 
-  stop() {
+  stop(ed, sender, opts = {}) {
+    const { em, editor } = this;
     this.stopSelectComponent();
-    this.cleanPrevious(this.em.get('selectedComponent'));
+    !opts.preserveSelected && em.setSelected(null);
     this.clean();
-    this.em.set('selectedComponent', null);
-    this.toggleClipboard();
-    this.hideBadge();
+    this.onOut();
     this.hideFixedElementOffset();
     this.canvas.getToolbarEl().style.display = 'none';
+    editor && editor.stopCommand('resize');
 
-    this.em.off('component:update', this.updateAttached, this);
-    this.em.off('change:canvasOffset', this.updateAttached, this);
-    this.em.off('change:selectedComponent', this.updateToolbar, this);
+    em.off('component:update', this.updateAttached, this);
+    em.off('change:canvasOffset', this.updateAttached, this);
   }
 };

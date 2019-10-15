@@ -1,19 +1,19 @@
-module.exports = () => {
-  var c = {},
-  defaults = require('./config/config'),
-  Traits = require('./model/Traits'),
-  TraitsView = require('./view/TraitsView');
-  var TraitsViewer;
+import { defaults, isElement } from 'underscore';
+import defaultOpts from './config/config';
+import TraitsView from './view/TraitsView';
+
+export default () => {
+  let c = {};
+  let TraitsViewer;
 
   return {
-
     TraitsView,
 
     /**
      * Name of the module
      * @type {String}
      * @private
-    */
+     */
     name: 'TraitManager',
 
     /**
@@ -29,22 +29,26 @@ module.exports = () => {
      * Initialize module. Automatically called with a new instance of the editor
      * @param {Object} config Configurations
      */
-    init(config) {
-      c = config || {};
-      for (var name in defaults) {
-        if (!(name in c))
-          c[name] = defaults[name];
-      }
-
-      var ppfx = c.pStylePrefix;
-      if(ppfx)
-        c.stylePrefix = ppfx + c.stylePrefix;
+    init(config = {}) {
+      c = config;
+      defaults(c, defaultOpts);
+      const ppfx = c.pStylePrefix;
+      ppfx && (c.stylePrefix = `${ppfx}${c.stylePrefix}`);
       TraitsViewer = new TraitsView({
         collection: [],
         editor: c.em,
-        config: c,
+        config: c
       });
       return this;
+    },
+
+    postRender() {
+      const elTo = this.getConfig().appendTo;
+
+      if (elTo) {
+        const el = isElement(elTo) ? elTo : document.querySelector(elTo);
+        el.appendChild(this.render());
+      }
     },
 
     /**
@@ -75,5 +79,8 @@ module.exports = () => {
       return TraitsViewer.itemsView[name];
     },
 
+    render() {
+      return TraitsViewer.render().el;
+    }
   };
 };

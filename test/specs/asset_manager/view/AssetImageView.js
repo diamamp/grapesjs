@@ -1,83 +1,70 @@
-var AssetImageView = require('asset_manager/view/AssetImageView');
-var AssetImage = require('asset_manager/model/AssetImage');
-var Assets = require('asset_manager/model/Assets');
+import AssetImageView from 'asset_manager/view/AssetImageView';
+import Assets from 'asset_manager/model/Assets';
 
 module.exports = {
   run() {
+    let obj;
 
     describe('AssetImageView', () => {
-
-      before(function () {
-        this.$fixtures = $("#fixtures");
-        this.$fixture = $('<div class="asset-fixture"></div>');
-      });
-
-      beforeEach(function () {
-        var coll   = new Assets();
-        var model = coll.add({ type:'image', src: '/test' });
-        this.view = new AssetImageView({
+      beforeEach(() => {
+        var coll = new Assets();
+        var model = coll.add({ type: 'image', src: '/test' });
+        obj = new AssetImageView({
           collection: new Assets(),
-          config : {},
+          config: {},
           model
         });
-        this.$fixture.empty().appendTo(this.$fixtures);
-        this.$fixture.html(this.view.render().el);
+        document.body.innerHTML = '<div id="fixtures"></div>';
+        document.body.querySelector('#fixtures').appendChild(obj.render().el);
       });
 
-      afterEach(function () {
-        this.view = null;
+      afterEach(() => {
+        obj = null;
+        document.body.innerHTML = '';
       });
 
-      after(function () {
-        this.$fixture.empty();
-      });
-
-      it('Object exists', () => {
-        expect(AssetImageView).toExist();
+      test('Object exists', () => {
+        expect(AssetImageView).toBeTruthy();
       });
 
       describe('Asset should be rendered correctly', () => {
+        test('Has preview box', () => {
+          var $asset = obj.$el;
+          expect($asset.find('.preview').length).toEqual(1);
+        });
 
-          it('Has preview box', function() {
-            var $asset = this.view.$el;
-            expect($asset.find('.preview').length).toEqual(1);
-          });
+        test('Has meta box', () => {
+          var $asset = obj.$el;
+          expect($asset.find('.meta').length).toEqual(1);
+        });
 
-          it('Has meta box', function() {
-            var $asset = this.view.$el;
-            expect($asset.find('.meta').length).toEqual(1);
-          });
-
-          it('Has close button', function() {
-            var $asset = this.view.$el;
-            expect($asset.find('[data-toggle=asset-remove]').length).toEqual(1);
-          });
-
+        test('Has close button', () => {
+          var $asset = obj.$el;
+          expect($asset.find('[data-toggle=asset-remove]').length).toEqual(1);
+        });
       });
 
-      it('Could be selected', function() {
-        var spy = expect.spyOn(this.view, 'updateTarget');
-        this.view.$el.trigger('click');
-        expect(this.view.$el.attr('class')).toInclude('highlight');
+      test('Could be selected', () => {
+        var spy = jest.spyOn(obj, 'updateTarget');
+        obj.$el.trigger('click');
+        expect(obj.$el.attr('class')).toContain('highlight');
         expect(spy).toHaveBeenCalled();
       });
 
-      it('Could be chosen', function() {
-        sinon.stub(this.view, 'updateTarget');
-        var spy = expect.spyOn(this.view, 'updateTarget');
-        this.view.$el.trigger('dblclick');
+      test('Could be chosen', () => {
+        sinon.stub(obj, 'updateTarget');
+        var spy = jest.spyOn(obj, 'updateTarget');
+        obj.$el.trigger('dblclick');
         expect(spy).toHaveBeenCalled();
-        //this.view.updateTarget.calledOnce.should.equal(true);
+        //obj.updateTarget.calledOnce.should.equal(true);
       });
 
-      it('Could be removed', function() {
+      test('Could be removed', () => {
         var spy = sinon.spy();
-        this.view.model.on("remove", spy);
-        this.view.$el.find('[data-toggle=asset-remove]').trigger('click');
+        obj.model.on('remove', spy);
+        obj.onRemove({ stopImmediatePropagation() {} });
         expect(spy.called).toEqual(true);
       });
-
     });
-
   }
 };

@@ -1,15 +1,7 @@
-var Backbone = require('backbone');
-var PropertyView = require('./PropertyView');
-var PropertyIntegerView = require('./PropertyIntegerView');
-var PropertyRadioView = require('./PropertyRadioView');
-var PropertySelectView = require('./PropertySelectView');
-var PropertyColorView = require('./PropertyColorView');
-var PropertyFileView = require('./PropertyFileView');
-var PropertyCompositeView = require('./PropertyCompositeView');
-var PropertyStackView = require('./PropertyStackView');
+import Backbone from 'backbone';
+import { appendAtIndex } from 'utils/dom';
 
-module.exports = Backbone.View.extend({
-
+export default Backbone.View.extend({
   initialize(o) {
     this.config = o.config || {};
     this.pfx = this.config.stylePrefix || '';
@@ -18,33 +10,46 @@ module.exports = Backbone.View.extend({
     this.onChange = o.onChange;
     this.onInputRender = o.onInputRender || {};
     this.customValue = o.customValue || {};
+    this.properties = [];
+    const coll = this.collection;
+    this.listenTo(coll, 'add', this.addTo);
+    this.listenTo(coll, 'reset', this.render);
+  },
+
+  addTo(model, coll, opts) {
+    this.add(model, null, opts);
+  },
+
+  add(model, frag, opts = {}) {
+    const appendTo = frag || this.el;
+    const view = new model.typeView({
+      model,
+      name: model.get('name'),
+      id: this.pfx + model.get('property'),
+      target: this.target,
+      propTarget: this.propTarget,
+      onChange: this.onChange,
+      onInputRender: this.onInputRender,
+      config: this.config
+    });
+
+    if (model.get('type') != 'composite') {
+      view.customValue = this.customValue;
+    }
+
+    view.render();
+    const rendered = view.el;
+    this.properties.push(view);
+
+    appendAtIndex(appendTo, rendered, opts.at);
   },
 
   render() {
-    var fragment = document.createDocumentFragment();
-
-    this.collection.each((model) => {
-      var view = new model.typeView({
-        model,
-        name: model.get('name'),
-        id: this.pfx + model.get('property'),
-        target: this.target,
-        propTarget: this.propTarget,
-        onChange: this.onChange,
-        onInputRender: this.onInputRender,
-        config: this.config,
-      });
-
-      if(model.get('type') != 'composite'){
-        view.customValue = this.customValue;
-      }
-
-      fragment.appendChild(view.render().el);
-    });
-
+    this.properties = [];
+    const fragment = document.createDocumentFragment();
+    this.collection.each(model => this.add(model, fragment));
     this.$el.append(fragment);
-    this.$el.append($('<div>', {class: "clear"}));
-    this.$el.attr('class', this.pfx + 'properties');
+    this.$el.attr('class', `${this.pfx}properties`);
     return this;
   }
 });

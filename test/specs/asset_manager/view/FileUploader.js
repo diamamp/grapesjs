@@ -1,88 +1,97 @@
-var FileUploader = require('asset_manager/view/FileUploader');
-
+import FileUploader from 'asset_manager/view/FileUploader';
 
 module.exports = {
   run() {
-
     describe('File Uploader', () => {
+      let obj;
 
-      before(function () {
-        this.$fixtures   = $("#fixtures");
-        this.$fixture   = $('<div class="fileupload-fixture"></div>');
+      beforeEach(() => {
+        obj = new FileUploader({ config: {} });
+        document.body.innerHTML = '<div id="fixtures"></div>';
+        document.body.querySelector('#fixtures').appendChild(obj.render().el);
       });
 
-      beforeEach(function () {
-        this.view = new FileUploader({ config : {} });
-        this.$fixture.empty().appendTo(this.$fixtures);
-        this.$fixture.html(this.view.render().el);
+      afterEach(() => {
+        obj.remove();
       });
 
-      afterEach(function () {
-        this.view.remove();
+      test('Object exists', () => {
+        expect(FileUploader).toBeTruthy();
       });
 
-      after(function () {
-        this.$fixture.remove();
-      });
-
-      it('Object exists', () => {
-        expect(FileUploader).toExist();
-      });
-
-      it('Has correct prefix', function() {
-        expect(this.view.pfx).toNotExist();
+      test('Has correct prefix', () => {
+        expect(obj.pfx).toBeFalsy();
       });
 
       describe('Should be rendered correctly', () => {
+        test('Has title', () => {
+          expect(obj.$el.find('#title').length).toEqual(1);
+        });
 
-          it('Has title', function() {
-            expect(this.view.$el.find('#title').length).toEqual(1);
-          });
+        test('Title is empty', () => {
+          expect(obj.$el.find('#title').html()).toEqual('');
+        });
 
-          it('Title is empty', function() {
-            expect(this.view.$el.find('#title').html()).toEqual('');
-          });
+        test('Has file input', () => {
+          expect(obj.$el.find('input[type=file]').length).toEqual(1);
+        });
 
-          it('Has file input', function() {
-            expect(this.view.$el.find('input[type=file]').length).toEqual(1);
-          });
-
-          it('File input is enabled', function() {
-            expect(this.view.$el.find('input[type=file]').prop('disabled')).toEqual(true);
-          });
-
+        test('File input is enabled', () => {
+          expect(obj.$el.find('input[type=file]').prop('disabled')).toEqual(
+            true
+          );
+        });
       });
 
       describe('Interprets configurations correctly', () => {
-
-          it('Has correct title', () => {
-            var view = new FileUploader({ config : {
-              uploadText : 'Test',
-            } });
-            view.render();
-            expect(view.$el.find('#title').html()).toEqual('Test');
+        test('Has correct title', () => {
+          var view = new FileUploader({
+            config: {
+              uploadText: 'Test'
+            }
           });
+          view.render();
+          expect(view.$el.find('#title').html()).toEqual('Test');
+        });
 
-          it('Could be disabled', () => {
-            var view = new FileUploader({ config : {
+        test('Could be disabled', () => {
+          var view = new FileUploader({
+            config: {
               disableUpload: true,
               upload: 'something'
-            } });
-            view.render();
-            expect(view.$el.find('input[type=file]').prop('disabled')).toEqual(true);
+            }
           });
-          
-          it('Handles embedAsBase64 parameter', () => {
-            var view = new FileUploader({ config : {
+          view.render();
+          expect(view.$el.find('input[type=file]').prop('disabled')).toEqual(
+            true
+          );
+        });
+
+        test('Handles multiUpload false', () => {
+          var view = new FileUploader({
+            config: {
+              multiUpload: false
+            }
+          });
+          view.render();
+          expect(
+            view.$el.find('input[type=file]').prop('multiple')
+          ).toBeFalsy();
+        });
+
+        test('Handles embedAsBase64 parameter', () => {
+          var view = new FileUploader({
+            config: {
               embedAsBase64: true
-            } });
-            view.render();
-            expect(view.$el.find('input[type=file]').prop('disabled')).toEqual(false);
-            expect(view.uploadFile).toEqual(FileUploader.embedAsBase64);
+            }
           });
-
+          view.render();
+          expect(view.$el.find('input[type=file]').prop('disabled')).toEqual(
+            false
+          );
+          expect(view.uploadFile).toEqual(FileUploader.embedAsBase64);
+        });
       });
-
     });
   }
-}
+};

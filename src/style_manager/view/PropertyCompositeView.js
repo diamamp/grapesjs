@@ -1,44 +1,46 @@
-var Backbone = require('backbone');
-var PropertyView = require('./PropertyView');
+import Backbone from 'backbone';
+import PropertyView from './PropertyView';
 
-module.exports = PropertyView.extend({
+const $ = Backbone.$;
 
-  templateField() {
+export default PropertyView.extend({
+  templateInput() {
     const pfx = this.pfx;
-    const ppfx = this.ppfx;
     return `
       <div class="${pfx}field ${pfx}composite">
         <span id="${pfx}input-holder"></span>
       </div>
-      <div style="clear:both"></div>
     `;
   },
 
-  initialize(o) {
-    PropertyView.prototype.initialize.apply(this, arguments);
-    this.config = o.config || {};
-    this.className = this.className + ' '+ this.pfx +'composite';
+  inputValueChanged(...args) {
+    // If it's not detached (eg. 'padding: 1px 2px 3px 4px;') it will follow
+    // the same flow of PropertyView
+    if (!this.model.get('detached')) {
+      PropertyView.prototype.inputValueChanged.apply(this, args);
+    }
   },
 
-  /**
-   * Fired when the input value is updated
-   */
-  valueUpdated(...args) {
-    if(!this.model.get('detached'))
-      PropertyView.prototype.valueUpdated.apply(this, args);
+  clear(e) {
+    const props = this.properties;
+    props && props.forEach(propView => propView.clear());
+    PropertyView.prototype.clear.apply(this, arguments);
   },
 
   /**
    * Renders input
    * */
-  renderInput() {
+  onRender() {
     var model = this.model;
     var props = model.get('properties') || [];
     var self = this;
+    this.properties = [];
 
     if (props.length) {
-      if(!this.$input)
-        this.$input = $('<input>', {value: 0, type: 'hidden' });
+      if (!this.$input) {
+        this.$input = $('<input type="hidden" value="0">');
+        this.input = this.$input.get(0);
+      }
 
       if (!this.props) {
         this.props = model.get('properties');
@@ -47,17 +49,18 @@ module.exports = PropertyView.extend({
       if (!this.$props) {
         //Not yet supported nested composite
         this.props.each(function(prop, index) {
-          if(prop && prop.get('type') == 'composite') {
+          if (prop && prop.get('type') == 'composite') {
             this.props.remove(prop);
             console.warn('Nested composite types not yet allowed.');
           }
           prop.parent = model;
         }, this);
 
-        var PropertiesView = require('./PropertiesView');
+        var PropertiesView = require('./PropertiesView').default;
         var propsView = new PropertiesView(this.getPropsConfig());
         this.$props = propsView.render().$el;
-        this.$el.find('#'+ this.pfx +'input-holder').html(this.$props);
+        this.properties = propsView.properties;
+        this.$el.find(`#${this.pfx}input-holder`).append(this.$props);
       }
     }
   },
@@ -84,7 +87,7 @@ module.exports = PropertyView.extend({
       // I need to extract from that string the corresponding one to that property.
       customValue(property, mIndex) {
         return that.valueOnIndex(mIndex, property);
-      },
+      }
     };
 
     // If detached let follow its standard flow
@@ -103,19 +106,26 @@ module.exports = PropertyView.extend({
    * */
   valueOnIndex(index, view) {
     let value;
-    const targetValue = this.getTargetValue({ignoreDefault: 1});
+    const targetValue = this.getTargetValue({ ignoreDefault: 1 });
 
     // If the target value of the composite is not empty I'll fetch
     // the corresponding value from the requested index, otherwise try
     // to get the value of the sub-property
     if (targetValue) {
-      const values = targetValue.split(' ');
-      value = view ? view.model.parseValue(values[index]) : values[index];
+      const values = targetValue.split(this.model.getSplitSeparator());
+      value = values[index];
     } else {
-      value = view.getTargetValue({ignoreCustomValue: 1});
+      value =
+        view && view.getTargetValue({ ignoreCustomValue: 1, ignoreDefault: 1 });
     }
 
     return value;
   },
 
+  clearCached() {
+    PropertyView.prototype.clearCached.apply(this, arguments);
+    this.$input = null;
+    this.props = null;
+    this.$props = null;
+  }
 });
